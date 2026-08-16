@@ -467,3 +467,50 @@ def test_validate_data_ambiguous_rows(fake_backend_env):
                 str(exc.value)
                 == f"Input data has an ambiguous number of rows: {X.shape[0]}, {Y.shape[0]}, {Z.shape[0]}."
             )
+
+
+@pytest.mark.parametrize("fake_backend_env", ["torch"], indirect=True)
+def test_validate_input_rejects_non_2d_X(fake_backend_env):
+    """_validate_input (used by fit/partial_fit) must reject X with ndim > 2.
+
+    Regression test for #1656/#1672: previously allow_nd=True let
+    higher-dimensional X through silently, producing mis-sized predictor/
+    adversary layers downstream instead of a clear, early error.
+    """
+    X_3d = np.random.rand(*Bin2d.shape, 2)
+    mitigator = get_instance(fake_mixin=True, fake_backend=fake_backend_env)
+    with pytest.raises(ValueError, match="dim"):
+        mitigator._validate_input(X_3d, Bin1d, Bin1d, reinitialize=True)
+
+
+@pytest.mark.parametrize("fake_backend_env", ["torch"], indirect=True)
+def test_predict_rejects_non_2d_X_after_fit(fake_backend_env):
+    """predict() must reject X with ndim > 2 even after the model is fitted.
+
+    Regression test for #1672: fixing BackendEngine.__init__ alone (#1656)
+    only covers the first call. This checks the separate _raw_predict path
+    that predict() relies on after fit() has already run once.
+    """
+    mitigator = get_instance(fake_mixin=True, fake_backend=fake_backend_env)
+    mitigator.fit(Bin2d, Bin1d, sensitive_features=Bin1d)
+
+    X_3d = np.random.rand(5, Bin2d.shape[1], 2)
+    with pytest.raises(ValueError, match="dim"):
+        mitigator.predict(X_3d)
+
+
+@pytest.mark.parametrize("fake_backend_env", ["torch"], indirect=True)
+def test_partial_fit_rejects_non_2d_X_after_fit(fake_backend_env):
+    """partial_fit() must reject X with ndim > 2 on calls after the first.
+
+    Regression test for #1672: after the first call, partial_fit() goes
+    through _validate_input -> backendEngine_.train_step() directly,
+    bypassing BackendEngine.__init__ (and therefore the #1656 ndim check)
+    entirely, so this path needs its own coverage.
+    """
+    mitigator = get_instance(fake_mixin=True, fake_backend=fake_backend_env)
+    mitigator.fit(Bin2d, Bin1d, sensitive_features=Bin1d)
+
+    X_3d = np.random.rand(5, Bin2d.shape[1], 2)
+    with pytest.raises(ValueError, match="dim"):
+        mitigator.partial_fit(X_3d, Bin1d[:5], sensitive_features=Bin1d[:5])
